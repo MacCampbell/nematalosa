@@ -10,3 +10,17 @@ knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
 
 Have the raw data from BioPlatforms.   
 
+/home/maccamp/nematalosa/data/bpa_5194af41_20250729T0730
+
+srun -p bigmemh -t 10:00:00 --mem=128GB --nodes=1 --cpus-per-task=64 hifiasm -o hunstmani-mtdna-asm -t 64 clup-mtdna.fastq
+
+in screen hifi
+conda activate hifiasm
+
+need fastq?
+
+samtools bam2fq 616604_FISH_BRF_m84118_250714_235739_s2.hifi_reads.bc2070.bam > nematalosa.fastq
+[M::bam2fq_mainloop] discarded 0 singletons
+[M::bam2fq_mainloop] processed 1805088 reads
+
+srun -p bigmemh -t 10:00:00 --mem=256GB --nodes=1 --cpus-per-task=64 hifiasm -o nematalosa-asm -t 64 nematalosa.fastq
