@@ -1,0 +1,95 @@
+---
+title: "101-assembly"
+output: html_document
+date: "2025-10-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+library(tidyverse)
+```
+Amy Tims assembled on PAWSEY and I stuck it in $MYSCRATCH/nematalosa-erebi
+
+Moving to outputs/101
+
+```{r}
+scp -r maccamp@setonix.pawsey.org.au:/scratch/pawsey1228/maccamp/nematalosa-erebi ./
+```
+
+Hap 1 isn't completely assembled. Maybe I can see about scaffolding it.
+
+Creating a syntenic map with minimap
+
+```{sh, eval=FALSE}
+srun -p bigmemh -t 16:00:00 --mem=128GB --nodes=1 --cpus-per-task 12 minimap2 -x asm5 hap1_scaffolds_final.fa hap2_scaffolds_final.fa | cut -f 1-12 > hap1-hap2.sam
+
+```
+
+
+```{r}
+gsizes<-read_tsv("outputs/101/nematalosa-erebi/hap1_scaffolds_final.fa.fai", col_names = FALSE) %>% select(X1, X2) %>% rename(Chrom=X1, Size=X2) %>% arrange(-Size) %>% head(n=25) %>% mutate(Cumulative=cumsum(Size+10e6)) %>% mutate(CStop=lag(Cumulative)+20e6)
+gsizes$Order<-factor(gsizes$Chrom, levels=gsizes$Chrom)
+gsizes$CStop<-replace_na(gsizes$CStop,0)
+
+asizes<-read_tsv("outputs/101/nematalosa-erebi/hap2_scaffolds_final.fa.fai", col_names = FALSE) %>% select(X1, X2) %>% rename(Chrom=X1, Size=X2) %>% arrange(-Size) %>%
+head(n=24) %>% mutate(Cumulative=cumsum(Size+10e6)) %>% mutate(CStop=lag(Cumulative)+20e6) 
+asizes$Order<-factor(asizes$Chrom, levels=asizes$Chrom)
+asizes$CStop<-replace_na(asizes$CStop, 0)
+
+orderg<-gsub("_RagTag","",gsizes$Order)
+orderg<-factor(orderg, levels=orderg)
+ordera<-gsub("_RagTag","",asizes$Order)
+ordera<-factor(ordera, levels=ordera)
+```
+
+
+```{r}
+ggplot() +
+  geom_segment(data=gsizes, aes(x=CStop, xend=CStop+Size, y=1, yend=1)) +
+  geom_segment(data=asizes, aes(x=CStop, xend=CStop+Size, y=-1, yend=-1)) 
+
+```
+
+
+```{r}
+ang<-read_tsv("outputs/101/hap1-hap2.sam", col_names = c("QueryName","QueryLength","QueryStart",	"QueryEnd",	"Direction","TargetName","TargetLength","TargetStart","TargetEnd","MatchingBases","MatchLength",	"MatchQuality"))  %>% mutate(Query="hap1") %>% mutate(Target="hap2") %>% filter(MatchLength > 100000) %>% filter(MatchQuality>=60) %>% mutate(Ids=1:n())
+ang$Ids<-factor(ang$Ids)
+
+ang<-ang %>% left_join(asizes, by=c("QueryName"="Chrom")) %>% left_join(gsizes, by=c("TargetName"="Chrom")) %>%
+  mutate(QueryStart=QueryStart+CStop.x, QueryEnd=QueryEnd+CStop.x) %>%
+  mutate(TargetStart=TargetStart+CStop.y, TargetEnd=TargetEnd+CStop.y)
+ang<-na.omit(ang)
+
+#t<-ang %>% select(Ids,QueryName, TargetName, Direction, QueryStart, QueryEnd, TargetStart, TargetEnd) %>% pivot_longer(5:8, names_to = "Position", values_to = "Value")  %>% group_by(Ids) 
+
+t<-ang %>% select(Ids,QueryName, TargetName, Direction, QueryEnd, QueryStart, TargetStart, TargetEnd) %>% pivot_longer(5:8, names_to = "Position", values_to = "Value")  %>% group_by(Ids) 
+t$y<-rep(c(1,1,-.01,-.01), nrow(t)/4)
+t<-t %>% arrange(Ids,y)
+t$Direction<-factor(t$Direction, levels = c("+","-"))
+```
+
+
+```{r}
+ggplot() +
+  geom_segment(data=gsizes, aes(x=CStop, xend=CStop+Size, y=-.01, yend=-.01), size=1.5, color="grey75") +
+  geom_segment(data=asizes, aes(x=CStop, xend=CStop+Size, y=1, yend=1), size=1.5, color="grey75") +
+  geom_polygon(data=t,aes(x=Value, y=y, group=Ids, fill=Direction), alpha=0.8) +
+
+ # geom_text(data=gsizes, aes(x=(CStop+CStop+Size)/2, label=Chrom), y=-1.1, size=2) +
+#  geom_text(data=asizes, aes(x=(CStop+CStop+Size)/2, label=Chrom), y=1.1, size=2) +
+  theme_bw() +
+  theme(panel.grid=element_blank()) +
+  theme(axis.title=element_blank()) +
+  scale_y_continuous(breaks=c(-0.01,1), labels = c("hap1","hap2")) +
+  theme(axis.ticks.x=element_blank(), axis.text.x=element_blank(), axis.line.x = element_blank()) +
+  scale_fill_viridis_d()
+
+#  facet_grid(.~TargetName, scales="free_x")  
+ggsave("outputs/101/hap1-hap2-minimap.jpeg", width=7, height=3)
+ggsave("outputs/101/hap1-hap2-minimap.pdf", width=7, height=3)
+
+```
+

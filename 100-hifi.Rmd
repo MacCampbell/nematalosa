@@ -8,6 +8,10 @@ date: "2025-07-30"
 knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
 ```
 
+```{r}
+library(tidyverse)
+```
+
 Have the raw data from BioPlatforms.   
 
 /home/maccamp/nematalosa/data/bpa_5194af41_20250729T0730
@@ -24,3 +28,142 @@ samtools bam2fq 616604_FISH_BRF_m84118_250714_235739_s2.hifi_reads.bc2070.bam > 
 [M::bam2fq_mainloop] processed 1805088 reads
 
 srun -p bigmemh -t 10:00:00 --mem=256GB --nodes=1 --cpus-per-task=64 hifiasm -o nematalosa-asm -t 64 nematalosa.fastq
+
+[M::main] Real time: 17306.935 sec; CPU: 876236.704 sec; Peak RSS: 25.201 GB
+
+create fasta
+
+awk '/^S/{print ">"$2;print $3}' nematalosa-asm.bp.hap1.p_ctg.gfa > nematalosa.hap1.fasta
+
+2094
+
+cat nematalosa.hap1.fasta.fai | cut -f 1,2 | sort -k 2 -n | awk '$2>1000000 {print;}'  | wc
+    285     570    5700
+
+
+wc -l lfs_draft_assembly.fasta.fai
+
+1913
+
+ cat lfs_draft_assembly.fasta.fai | cut -f 1,2 | sort -k 2 -n | awk '$2>1000000 {print;}'  | wc
+    103     206    1958
+
+## Next Steps
+Calculate assembly metrics
+Calculate BUSCO
+
+srun -p high -t 2:00:00 --mem=32GB --nodes=1 --cpus-per-task=2 ~/bin/assembledSeqStats.pl nematalosa.hap1.fasta
+
+
+Number of Contigs       2094
+Total Bases     968251649
+No. of Contigs >=1000   2094
+Total Bases in Contigs >=1000   968251649
+Mean Contig Length      462393.337631328
+Max Contig Length       9717978
+N50     1191127
+Number of Contigs in N50        222
+GC content      42.7617391023932
+Proportion of Ns        0
+
+BUSCO
+(base) maccamp@farm:~$ module load busco/5.4.3
+busco --list-datasets
+            - actinopterygii_odb12 [7207]
+            - mollusca_odb12 [4421]
+
+            
+-i  # Input sequence file or folder
+-m  # BUSCO analysis mode to run. Can be 'genome', 'protein' or 'transcriptome'.
+Recommended Options
+-c  # Number of threads/cores to use
+-l  # Specify the BUSCO lineage dataset to be used for scoring
+-o  # Specify the name of the output folder
+
+some stupid crap with orthodb. installing via conda
+(base) maccamp@farm:~/nematalosa/outputs/100$ conda create -n busco
+conda activate busco
+conda install bioconda::busco
+
+Version 6 downloaded seems to be working over module of version 5
+
+srun -p high -t 6:00:00 --mem=32GB --nodes=1 --cpus-per-task=12 busco -i nematalosa.hap1.fasta -o busco -m genome -l actinopterygii_odb12 --cpu 12
+
+
+
+    |Results from dataset actinopterygii_odb12                                                 |
+    -------------------------------------------------------------------------------------------
+    |C:94.6%[S:92.4%,D:2.2%],F:1.4%,M:4.1%,n:7207,E:7.6%                                       |
+    |6815    Complete BUSCOs (C)    (of which 520 contain internal stop codons)                |
+    |6660    Complete and single-copy BUSCOs (S)                                               |
+    |155    Complete and duplicated BUSCOs (D)                                                 |
+    |98    Fragmented BUSCOs (F)                                                               |
+    |294    Missing BUSCOs (M)                                                                 |
+    |7207    Total BUSCO groups searched    
+    
+Took about 2 hours
+    
+## Adapters
+
+>gnl|uv|NGB00972.1:1-45 Pacific Biosciences Blunt Adapter
+ATCTCTCTCTTTTCCTCCTCCTCCGTTGTTGTTGTTGAGAGAGAT
+
+>gnl|uv|NGB00973.1:1-35 Pacific Biosciences C2 Primer
+AAAAAAAAAAAAAAAAAATTAACGGAGGAGGAGGA
+
+(base) maccamp@farm:~/nematalosa/data$ grep AAAAAAAAAAAAAAAAAATTAACGGAGGAGGAGGA ../outputs/100/nematalosa.hap1.fasta
+
+Not seeing these in our assembly. What about our raw data?
+
+I suppose I can try blastn
+
+module load blast-plus
+(base) maccamp@farm:~/nematalosa/outputs/100$ makeblastdb -in nematalosa.hap1.fasta -dbtype 'nucl'
+(base) maccamp@farm:~/nematalosa/outputs/100$ blastn -query ../../data/adapters.fasta -db nematalosa.hap1.fasta -outfmt 6
+
+no hits!!
+
+## Which % of contigs are over 50kb?
+(base) maccamp@farm:~/nematalosa/outputs/100$ cat nematalosa.hap1.fasta.fai  | cut -f 1,2 > lengths.txt
+
+```{r}
+lens<-read_tsv("outputs/100/lengths.txt", col_names = c("Contig","Length"))
+round(nrow(lens %>% filter(Length>50000))/nrow(lens) * 100,2)
+lens %>% summarize(Mean=mean(Length), Median=median(Length), Min=min(Length), Max=max(Length))
+```
+
+
+
+```{r}
+ggplot(lens) +
+  geom_histogram(aes(x=Length), alpha=0.9) +
+  geom_vline(aes(xintercept=50000)) +
+  theme_bw() +
+  theme(panel.grid = element_blank())+
+  ylab("Count\n") +
+  xlab("\nContig Length") +
+  ggtitle("Histogram of Contig Lengths in Nematalosa de novo Assembly\n") +
+  theme(plot.title=element_text(hjust=0.5)) +
+  theme(axis.title = element_text(size=14))
+
+ggsave("outputs/100/nematalosa-histo.jpeg", width=8, height=6)
+```
+
+
+Percent of bases over 50KB
+
+```{r}
+lens %>% filter(Length>50000) %>% summarize(Bases=sum(Length))
+lens %>% filter(Length<=50000) %>% summarize(Bases=sum(Length))
+13812186/954439463
+```
+
+N50, expect 1191127
+```{r}
+lens %>% arrange(Length)  %>% mutate(Total=sum(Length)) %>% mutate(Half=.5*Total) %>% mutate(CumSum=cumsum(Length)) %>% filter(Half < CumSum) 
+```
+
+N75
+```{r}
+lens %>% arrange(Length)  %>% mutate(Total=sum(Length)) %>% mutate(Half=.25*Total) %>% mutate(CumSum=cumsum(Length)) %>% filter(Half < CumSum) 
+```
