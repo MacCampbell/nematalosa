@@ -1,0 +1,377 @@
+---
+title: "103-vcf"
+output: html_document
+date: "2025-12-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+library(ape)
+library(vcfR)
+library(adegenet)
+library(ggpubr)
+library(ggrepel)
+library(ggplotify)
+library(snpR)
+library(ggtree)
+library(tanggle)
+library(RColorBrewer)
+library(pheatmap)
+library(tidyverse)
+```
+
+Received a VCF from Luis on 12/2
+
+Have list of chroms in data/chroms.tsv
+
+
+scaffold_6 6291620	22526456
+scaffold_8 5067926	29962161
+scaffold_9 14123901	35865842
+scaffold_11 219668	24099434
+scaffold_21 6558641	24209072
+
+Looks to have 80,783 variants and match Peter's sample names
+These have mostly been filtered for missing data but can check 
+
+
+```{r}
+meta<-read_csv("meta/meta-filtered-edited.csv")
+meta$Taxon<-factor(meta$Taxon, levels=c("erebi","richardsoni","bulleri","paracome","Pilbara sp. nov.","papuensis","come","vlaminghi"))
+meta<-meta %>% mutate(Label=paste0(pop,"_",id))
+```
+
+# Erebi
+Let's do a quick idiot check for LD in erebi, n=66
+
+```{r}
+erebi<-filter(meta, Taxon=="erebi")
+erebi %>% select(Label) %>% write_tsv(file = "meta/erebi.tsv", col_names = FALSE)
+```
+
+```{sh, eval=FALSE}
+bcftools view -S meta/erebi.tsv data/gl_vcf.vcf.gz > outputs/103/erebi.vcf
+bcftools +fill-tags outputs/103/erebi.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.05' | bcftools view -i 'INFO/MAF > 0.05'  > outputs/103/erebi-filtered.vcf
+bgzip outputs/103/erebi-filtered.vcf
+tabix outputs/103/erebi-filtered.vcf.gz
+
+mkdir outputs/103/vcfs
+mkdir outputs/103/chrom-ld
+mkdir outputs/103/chrom-pcs
+```
+
+```{sh, eval=FALSE}
+paste \
+<(bcftools query -f '[%SAMPLE\t]\n' erebi-filtered.vcf.gz | head -1 | tr '\t' '\n') \
+<(bcftools query -f '[%GT\t]\n' erebi-filtered.vcf.gz | awk -v OFS="\t" '{for (i=1;i<=NF;i++) if ($i == "./.") sum[i]+=1 } END {for (i in sum) print i, sum[i] / NR }' | sort -k1,1n | cut -f 2) > missingness.stats
+ cat missingness.stats | sort -k 2 -n | tail
+```
+
+Pretty low overall missing data  
+
+PU2254_NE2254.2	0.0169858
+PU1788_NE1788.1	0.0194565
+PU2262_NE2262.1	0.0219271
+PU0252_NE0252.3	0.0234713
+PU14115_NE14115.2	0.0240889
+PU1436_NE1436.1	0.0281038
+PU2219_NE2219.1	0.0288758
+PU1436_NE1436.2	0.0319642
+PU2219_NE2219.2	0.0535825
+PU1206_NE1206.1	0.0585238
+
+## LD
+```{sh, eval=FALSE}
+cat data/chroms.tsv  | while read line; do bcftools view -Ov -r $line outputs/103/erebi-filtered.vcf.gz > outputs/103/vcfs/$line.vcf; done;
+
+bcftools view  outputs/103/erebi-filtered.vcf.gz -r scaffold_6:6291620-22526456 > outputs/103/vcfs/6-region.vcf
+bcftools view  outputs/103/erebi-filtered.vcf.gz -r scaffold_8:5067926-29962161 > outputs/103/vcfs/8-region.vcf
+bcftools view  outputs/103/erebi-filtered.vcf.gz -r scaffold_9:14123901-35865842 > outputs/103/vcfs/9-region.vcf
+bcftools view  outputs/103/erebi-filtered.vcf.gz -r scaffold_11:219668-24099434 > outputs/103/vcfs/11-region.vcf
+bcftools view  outputs/103/erebi-filtered.vcf.gz -r scaffold_21:6558641-24209072 > outputs/103/vcfs/21-region.vcf
+
+# in outputs/103/vcfs
+for f in *.vcf; do plink --vcf $f --r2 inter-chr --ld-window-r2 0.1 --out `basename $f vcf`ldf --allow-extra-chr --double-id; done;
+
+```
+
+```{r, eval=FALSE}
+files<-list.files("outputs/103/vcfs",pattern = "*.ldf.ld", full.names = TRUE)
+
+plotLd<-function(file) {
+  chrom<-gsub("outputs/103/vcfs/","",file)
+  chrom<-gsub(".ldf.ld","", chrom)
+  lc<-read.delim(file,sep="",stringsAsFactors=FALSE) %>% as_tibble() %>% arrange(R2) %>%  filter(R2 >0.3)
+
+  ggplot(lc) +
+  geom_point(aes(x=BP_A, y=BP_B, color=R2), alpha=0.5) +
+  scale_color_gradient(low="khaki1", high="red") + 
+  ggtitle(paste0(chrom))+
+  theme_bw() +
+  theme(panel.grid = element_blank())
+ggsave(paste0("outputs/103/chrom-ld/",chrom,".pdf"))
+}
+
+lapply(files, plotLd)
+```
+
+## Chrom by Chrom PCs
+
+
+```{r, eval=FALSE}
+files<-list.files("outputs/103/vcfs",pattern = "*.vcf", full.names = TRUE)
+
+plotPCA<-function(file) {
+  meta<-erebi
+  chrom<-gsub("outputs/103/vcfs/","",file)
+  chrom<-gsub(".vcf","", chrom)
+  
+  vcf<-read.vcfR(file=file)
+  genind<-vcfR2genind(vcf)
+  genind@pop<-as.factor(meta$Pop)
+
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(meta)
+eig<-pca1$eig/sum(pca1$eig)*100
+
+
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=river),pch=21, alpha=0.75, cex=2) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+  #geom_text_repel(aes(x=Axis1, y=Axis2,label=ID))
+pc12
+
+ggsave(paste0("outputs/103/chrom-pcs/",chrom,".pdf"))
+}
+
+lapply(files, plotPCA)
+```
+
+Identify genotypes here.
+
+# Scaffold 6
+
+
+```{r}
+vcf<-read.vcfR(file="outputs/103/vcfs/6-region.vcf")
+genind<-vcfR2genind(vcf)
+genind@pop<-as.factor(erebi$Taxon)
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(erebi)
+
+eig<-pca1$eig/sum(pca1$eig)*100
+```
+
+```{r}
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=river), alpha=0.75, cex=2, pch=21) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+pc12
+ggsave("outputs/103/scaffold6-region-pca.jpeg")
+```
+
+```{r}
+df %>% filter(Axis2 < -10)
+df %>% filter(Axis2 >-10 & Axis2 < -2)
+
+df2<-df %>% mutate(Chromosome="6") %>% mutate(Genotype=ifelse(Axis2 < -10, "RHom",ifelse(Axis2 > -10 & Axis2 < -2,"Het","AHom"))) %>%
+  select(Label,Genotype,Chromosome)
+write_csv(df2,"meta/erebi-ss-chrom6-genos.csv")
+
+df2%>% group_by(Genotype) %>% summarize(Count=n())
+```
+
+
+# Scaffold 8
+
+
+```{r}
+vcf<-read.vcfR(file="outputs/103/vcfs/8-region.vcf")
+genind<-vcfR2genind(vcf)
+genind@pop<-as.factor(erebi$Taxon)
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(erebi)
+
+eig<-pca1$eig/sum(pca1$eig)*100
+```
+
+```{r}
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=river), alpha=0.75, cex=2, pch=21) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+pc12
+ggsave("outputs/103/scaffold8-region-pca.jpeg")
+```
+
+```{r}
+df %>% filter(Axis1 < -15)
+df %>% filter(Axis1 >-10 & Axis1 < 0)
+df2<-df %>% mutate(Chromosome="8") %>% mutate(Genotype=ifelse(Axis1 < -15, "RHom",ifelse(Axis1 > -10 & Axis1 < -0,"Het","AHom"))) %>%
+  select(Label,Genotype,Chromosome)
+write_csv(df2,"meta/erebi-ss-chrom8-genos.csv")
+
+df2%>% group_by(Genotype) %>% summarize(Count=n())
+```
+
+
+# Scaffold 9
+
+
+```{r}
+vcf<-read.vcfR(file="outputs/103/vcfs/9-region.vcf")
+genind<-vcfR2genind(vcf)
+genind@pop<-as.factor(erebi$Taxon)
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(erebi)
+
+eig<-pca1$eig/sum(pca1$eig)*100
+```
+
+```{r}
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=river), alpha=0.75, cex=2, pch=21) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+pc12
+ggsave("outputs/103/scaffold9-region-pca.jpeg")
+```
+
+```{r}
+df %>% filter(Axis1 < -15)
+df %>% filter(Axis1 >-10 & Axis1 < 0)
+df2<-df %>% mutate(Chromosome="9") %>% mutate(Genotype=ifelse(Axis1 < -15, "RHom",ifelse(Axis1 > -10 & Axis1 < 0,"Het","AHom"))) %>%
+  select(Label,Genotype,Chromosome)
+write_csv(df2,"meta/erebi-ss-chrom9-genos.csv")
+
+df2%>% group_by(Genotype) %>% summarize(Count=n())
+```
+
+
+
+# Scaffold 11
+
+```{r}
+vcf<-read.vcfR(file="outputs/103/vcfs/11-region.vcf")
+genind<-vcfR2genind(vcf)
+genind@pop<-as.factor(erebi$Taxon)
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(erebi)
+
+eig<-pca1$eig/sum(pca1$eig)*100
+```
+
+```{r}
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=river), alpha=0.75, cex=2, pch=21) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+pc12
+ggsave("outputs/103/scaffold11-region-pca.jpeg")
+```
+
+```{r}
+df %>% filter(Axis1 < -10)
+df %>% filter(Axis1 >-10 & Axis1 < 5)
+df2<-df %>% mutate(Chromosome="11") %>% mutate(Genotype=ifelse(Axis1 < -10, "RHom",ifelse(Axis1 > -10 & Axis1 < 5,"Het","AHom"))) %>%
+  select(Label,Genotype,Chromosome)
+write_csv(df2,"meta/erebi-ss-chrom11-genos.csv")
+
+df2%>% group_by(Genotype) %>% summarize(Count=n())
+```
+
+# Scaffold 21
+
+```{r}
+vcf<-read.vcfR(file="outputs/103/vcfs/21-region.vcf")
+genind<-vcfR2genind(vcf)
+genind@pop<-as.factor(erebi$Taxon)
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(erebi)
+
+eig<-pca1$eig/sum(pca1$eig)*100
+```
+
+```{r}
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=river), alpha=0.75, cex=2, pch=21) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+pc12
+ggsave("outputs/103/scaffold21-region-pca.jpeg")
+```
+
+```{r}
+df %>% filter(Axis1 < -10)
+df %>% filter(Axis1 >-10 & Axis1 < 0)
+df2<-df %>% mutate(Chromosome="21") %>% mutate(Genotype=ifelse(Axis1 < -10, "RHom",ifelse(Axis1 > -10 & Axis1 < 0,"Het","AHom"))) %>%
+  select(Label,Genotype,Chromosome)
+write_csv(df2,"meta/erebi-ss-chrom21-genos.csv")
+
+df2%>% group_by(Genotype) %>% summarize(Count=n())
+```

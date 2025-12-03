@@ -1,0 +1,233 @@
+---
+title: "104-erebi-lato"
+output: html_document
+date: "2025-12-02"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+library(ape)
+library(vcfR)
+library(adegenet)
+library(ggpubr)
+library(ggrepel)
+library(ggplotify)
+library(snpR)
+library(ggtree)
+library(tanggle)
+library(RColorBrewer)
+library(pheatmap)
+library(tidyverse)
+```
+
+Received a VCF from Luis on 12/2
+
+Have list of chroms in data/chroms.tsv
+
+
+scaffold_6 6291620	22526456
+scaffold_8 5067926	29962161
+scaffold_9 14123901	35865842
+scaffold_11 219668	24099434
+scaffold_21 6558641	24209072
+
+Looks to have 80,783 variants and match Peter's sample names
+These have mostly been filtered for missing data but can check 
+
+
+```{r}
+meta<-read_csv("meta/meta-filtered-edited.csv")
+meta$Taxon<-factor(meta$Taxon, levels=c("erebi","richardsoni","bulleri","paracome","Pilbara sp. nov.","papuensis","come","vlaminghi"))
+meta<-meta %>% mutate(Label=paste0(pop,"_",id))
+
+meta %>% group_by(Taxon) %>% summarize(Count=n())
+```
+
+# Erebi sensu lato + papuensis, 231 inds
+
+```{r}
+sl<-meta %>% filter(!Taxon %in% c("come","vlaminghi","papuensis"))
+sl %>% select(Label) %>% write_tsv(file = "meta/sl.tsv", col_names = FALSE)
+
+sl2<- sl %>% filter(!Label %in% c("Fly_NPFly.1","Fly_NPFly.3") )
+```
+
+Warn: subset called for sample that does not exist in header: "Fly_NPFly.1"... skipping
+Warn: subset called for sample that does not exist in header: "Fly_NPFly.3"... skipping
+going back and filtering meta to sl2
+
+```{sh, eval=FALSE}
+bcftools view -S meta/sl.tsv data/gl_vcf.vcf.gz --force-samples > outputs/104/erebi.vcf
+bcftools +fill-tags outputs/104/erebi.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.05' | bcftools view -i 'INFO/MAF > 0.05'  > outputs/104/erebi-filtered.vcf
+bgzip outputs/104/erebi-filtered.vcf
+tabix outputs/104/erebi-filtered.vcf.gz
+
+mkdir outputs/104/vcfs
+mkdir outputs/104/chrom-ld
+mkdir outputs/104/chrom-pcs
+```
+
+```{sh, eval=FALSE}
+paste \
+<(bcftools query -f '[%SAMPLE\t]\n' erebi-filtered.vcf.gz | head -1 | tr '\t' '\n') \
+<(bcftools query -f '[%GT\t]\n' erebi-filtered.vcf.gz | awk -v OFS="\t" '{for (i=1;i<=NF;i++) if ($i == "./.") sum[i]+=1 } END {for (i in sum) print i, sum[i] / NR }' | sort -k1,1n | cut -f 2) > missingness.stats
+ cat missingness.stats | sort -k 2 -n | tail
+```
+
+Papuensis has super high missing data, so dropping
+Manning_NEManning.1	0.0776542
+Koolatong_NEKoolatong.1	0.119919
+Fly_NPFly.10	0.149646
+Fly_NPFly.5	0.150253
+Fly_NPFly.7	0.378969
+Fly_NPFly.4	0.407482
+Fly_NPFly.8	0.547422
+Fly_NPFly.6	0.667745
+Fly_NPFly.9	0.675228
+Fly_NPFly.2	0.69727
+
+Now
+Dillie_NEDillie.1	0.0616135
+Finniss_NEFinniss.1	0.0635343
+PU1206_NE1206.1	0.0670804
+Blina_NEBlina.1	0.0755024
+Ashburton_NEAshburton.1	0.079935
+Clints_NEClints.1	0.0851064
+Liverpool_NELiverpool.1	0.0859929
+Manning_NEManning.1	0.102246
+Manning_NEManning.2	0.102246
+Koolatong_NEKoolatong.1	0.163859
+
+## LD
+```{sh, eval=FALSE}
+cat data/chroms.tsv  | while read line; do bcftools view -Ov -r $line outputs/104/erebi-filtered.vcf.gz > outputs/104/vcfs/$line.vcf; done;
+
+bcftools view  outputs/104/erebi-filtered.vcf.gz -r scaffold_6:6291620-22526456 > outputs/104/vcfs/6-region.vcf
+bcftools view -i 'INFO/MAF > 0.1' outputs/104/vcfs/6-region.vcf   > outputs/104/vcfs/maf-6-region.vcf
+bcftools view  outputs/104/erebi-filtered.vcf.gz -r scaffold_8:5067926-29962161 > outputs/104/vcfs/8-region.vcf
+bcftools view  outputs/104/erebi-filtered.vcf.gz -r scaffold_9:14123901-35865842 > outputs/104/vcfs/9-region.vcf
+bcftools view  outputs/104/erebi-filtered.vcf.gz -r scaffold_11:219668-24099434 > outputs/104/vcfs/11-region.vcf
+bcftools view  outputs/104/erebi-filtered.vcf.gz -r scaffold_21:6558641-24209072 > outputs/104/vcfs/21-region.vcf
+
+# in outputs/104/vcfs
+for f in *.vcf; do plink --vcf $f --r2 inter-chr --ld-window-r2 0.1 --out `basename $f vcf`ldf --allow-extra-chr --double-id; done;
+
+```
+
+```{r, eval=FALSE}
+files<-list.files("outputs/104/vcfs",pattern = "*.ldf.ld", full.names = TRUE)
+
+plotLd<-function(file) {
+  chrom<-gsub("outputs/104/vcfs/","",file)
+  chrom<-gsub(".ldf.ld","", chrom)
+  lc<-read.delim(file,sep="",stringsAsFactors=FALSE) %>% as_tibble() %>% arrange(R2) %>%  filter(R2 >0.3)
+
+  ggplot(lc) +
+  geom_point(aes(x=BP_A, y=BP_B, color=R2), alpha=0.5) +
+  scale_color_gradient(low="khaki1", high="red") + 
+  ggtitle(paste0(chrom))+
+  theme_bw() +
+  theme(panel.grid = element_blank())
+ggsave(paste0("outputs/104/chrom-ld/",chrom,".pdf"))
+}
+
+lapply(files, plotLd)
+```
+
+## Chrom by Chrom PCs
+
+
+```{r, eval=FALSE}
+files<-list.files("outputs/104/vcfs",pattern = "*.vcf", full.names = TRUE)
+
+plotPCA<-function(file) {
+  meta<-sl
+  chrom<-gsub("outputs/104/vcfs/","",file)
+  chrom<-gsub(".vcf","", chrom)
+  
+  vcf<-read.vcfR(file=file)
+  genind<-vcfR2genind(vcf)
+  genind@pop<-as.factor(meta$Pop)
+
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(meta)
+eig<-pca1$eig/sum(pca1$eig)*100
+
+
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=Taxon),pch=21, alpha=0.75, cex=2) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+  #geom_text_repel(aes(x=Axis1, y=Axis2,label=ID))
+pc12
+
+ggsave(paste0("outputs/104/chrom-pcs/",chrom,".pdf"))
+}
+
+lapply(files, plotPCA)
+```
+
+# Classify
+
+
+Scaffold 6
+
+```{r}
+vcf<-read.vcfR(file="outputs/104/vcfs/6-region.vcf")
+genind<-vcfR2genind(vcf)
+genind@pop<-as.factor(sl$Pop)
+gen<-genind
+X <- tab(gen, NA.method="mean")
+
+pca1 <- dudi.pca(X,scannf=FALSE,scale=FALSE,nf=3)
+
+df<-pca1$li
+df<-df %>% bind_cols(sl)
+
+eig<-pca1$eig/sum(pca1$eig)*100
+```
+
+```{r}
+pc12<-ggplot(df) + 
+  geom_point(aes(x=Axis1, y=Axis2, fill=Taxon), alpha=0.75, cex=2, pch=21) +
+  theme_bw() +
+  xlab(paste0("PC1 ",round(eig[1],2), "%")) +
+  ylab(paste0("PC2 ",round(eig[2],2), "%")) +
+  theme(panel.grid = element_blank()) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  theme(legend.position = "top") 
+pc12
+ggsave("outputs/104/scaffold6-region-pca.jpeg")
+```
+
+Possible missing data cluster at 0,0
+cut -f 1-3 6-region.vcf |grep -v "#" > 6.coords
+```{r}
+loadings<-pca1$c1 %>% as_tibble()
+loadings$Allele<-rownames(pca1$c1) 
+loadings$Allele<-gsub("\\.[0|1]$","",loadings$Allele)
+coords<-read_tsv("outputs/104/vcfs/6.coords", col_names = c("Chrom","Position","Allele"))
+loadings<-loadings %>% left_join(coords)
+
+tops<-loadings %>% arrange(-CS1) %>% slice_max(order_by = CS1,prop = .2) %>% select(-CS2, -CS3) %>% 
+  mutate(MajorMinor=gsub("lcl\\|*\\.","",Allele)) 
+
+tops %>% relocate(Chrom, Position, CS1)
+tops
+```
+

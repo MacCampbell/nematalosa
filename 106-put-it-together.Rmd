@@ -1,0 +1,251 @@
+---
+title: "106-put-it-together"
+output: html_document
+date: "2025-12-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message = FALSE)
+```
+
+```{r}
+library(ape)
+library(vcfR)
+library(viridis)
+library(adegenet)
+library(tanggle)
+library(phangorn)
+library(ggpubr)
+library(ggrepel)
+library(ggplotify)
+library(snpR)
+library(ggtree)
+library(tanggle)
+library(RColorBrewer)
+library(pheatmap)
+library(tidyverse)
+```
+
+Create a rooted phylogeny of our fish
+
+```{r}
+meta<-read_csv("meta/meta-filtered-edited.csv")
+meta$Taxon<-factor(meta$Taxon, levels=c("erebi","richardsoni","bulleri","paracome","Pilbara sp. nov.","papuensis","come","vlaminghi"))
+meta<-meta %>% mutate(Label=paste0(pop,"_",id))
+```
+
+```{sh,eval=FALSE}
+bcftools view -r scaffold_1,scaffold_2,scaffold_3,scaffold_4,scaffold_5,scaffold_7,scaffold_10,scaffold_12,scaffold_13,scaffold_14,scaffold_15,scaffold_16,scaffold_17,scaffold_18,scaffold_19,scaffold_20,scaffold_22,scaffold_23,scaffold_24,scaffold_25 data/gl_vcf.vcf.gz > outputs/106/non-inversion.vcf
+
+bcftools +fill-tags outputs/106/non-inversion.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.10' | bcftools view -i 'INFO/MAF > 0.05' |  bcftools +prune -m 0.20 -w 50kb --nsites-per-win 1 --nsites-per-win-mode rand  > outputs/106/pruned-05-rand.vcf
+
+bcftools +fill-tags outputs/106/non-inversion.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.10' | bcftools view -i 'INFO/MAF > 0.05' |  bcftools +prune -m 0.20 -w 50kb --nsites-per-win 1 --nsites-per-win-mode maxAF  > outputs/106/pruned-05-max.vcf
+
+bcftools +fill-tags outputs/106/non-inversion.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.10' | bcftools view -i 'INFO/MAF > 0.01' |  bcftools +prune -m 0.20 -w 50kb --nsites-per-win 1 --nsites-per-win-mode rand  > outputs/106/pruned-01-rand.vcf
+
+bcftools +fill-tags outputs/106/non-inversion.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.10' | bcftools view -i 'INFO/MAF > 0.01' |  bcftools +prune -m 0.20 -w 50kb --nsites-per-win 1 --nsites-per-win-mode maxAF  > outputs/106/pruned-01-max.vcf
+```
+
+# Phylo
+
+```{sh, eval=FALSE}
+conda activate py2;
+~/github/mccloud-rrt/vcf2phylip.py -i pruned-05-max.vcf;
+~/github/mccloud-rrt/vcf2phylip.py -i pruned-05-rand.vcf;
+~/github/mccloud-rrt/vcf2phylip.py -i pruned-01-max.vcf;
+~/github/mccloud-rrt/vcf2phylip.py -i pruned-01-rand.vcf;
+conda deactivate;
+
+iqtree2  -nt AUTO -m MFP+ASC -bb 1000 -s pruned-05-max.min4.phy --seqtype DNA --redo
+iqtree2  -nt AUTO -m MFP+ASC -bb 10000 -s pruned-05-max.min4.phy.varsites.phy --seqtype DNA --redo
+
+
+iqtree2  -nt AUTO -m MFP+ASC -bb 1000 -s pruned-05-rand.min4.phy --seqtype DNA --redo
+iqtree2  -nt AUTO -m MFP+ASC -bb 10000 -s pruned-05-rand.min4.phy.varsites.phy --seqtype DNA --redo
+
+
+iqtree2  -nt AUTO -m MFP+ASC -bb 1000 -s pruned-01-max.min4.phy --seqtype DNA --redo
+iqtree2  -nt AUTO -m MFP+ASC -bb 10000 -s pruned-01-max.min4.phy.varsites.phy --seqtype DNA --redo
+
+iqtree2  -nt AUTO -m MFP+ASC -bb 1000 -s pruned-01-rand.min4.phy --seqtype DNA --redo
+iqtree2  -nt AUTO -m MFP+ASC -bb 10000 -s pruned-01-rand.min4.phy.varsites.phy --seqtype DNA --redo
+
+```
+
+
+```{r}
+dat<-read.dna(file="outputs/106/phylo/pruned-05-max.min4.phy.varsites.phy")
+write.nexus.data(dat, file="outputs/106/phylo/pruned-05-max.nex")
+
+dat<-read.dna(file="outputs/106/phylo/pruned-05-rand.min4.phy.varsites.phy")
+write.nexus.data(dat, file="outputs/106/phylo/pruned-05-rand.nex")
+
+dat<-read.dna(file="outputs/106/phylo/pruned-01-max.min4.phy.varsites.phy")
+write.nexus.data(dat, file="outputs/106/phylo/pruned-01-max.nex")
+
+dat<-read.dna(file="outputs/106/phylo/pruned-01-rand.min4.phy.varsites.phy")
+write.nexus.data(dat, file="outputs/106/phylo/pruned-01-rand.nex")
+```
+
+
+
+```{r}
+net<-read.nexus.networx("outputs/106/phylo/05-max-network")
+m<-meta
+```
+
+```{r}
+g<-ggsplitnet(net, color="black")  
+g$data<-left_join(g$data, m, by=c("label"="Label")) 
+
+n<-g + 
+  geom_tippoint(aes(fill=Taxon), cex=5, alpha=1.00, pch=21) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+#  theme(legend.position = "none") +
+  theme(panel.grid=element_blank())
+  #theme(panel.background = element_rect(fill="black", color="black")) +
+  #theme(plot.background = element_rect(fill="black", color="black")) +
+  #theme(legend.background =element_rect(fill="black", color="black"), legend.text = element_text(color="white"), legend.title = element_text(color="white")) +
+  #theme(axis.text=element_text(color="white", size=12)) +
+  #theme(axis.title=element_text(color="white", face="bold", size=14))  +
+ # theme(legend.position = "none")
+  
+  
+  #color white and black
+n
+ggsave("outputs/106/network-max.jpeg", width=10, height=8)
+ggsave("outputs/106/network-max.pdf", width=10, height=8)
+
+```
+
+```{r}
+net<-read.nexus.networx("outputs/106/phylo/01-max-network")
+m<-meta
+```
+
+```{r}
+g<-ggsplitnet(net, color="black")  
+g$data<-left_join(g$data, m, by=c("label"="Label")) 
+
+n<-g + 
+  geom_tippoint(aes(fill=Taxon), cex=5, alpha=1.00, pch=21) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+#  theme(legend.position = "none") +
+  theme(panel.grid=element_blank())
+  #theme(panel.background = element_rect(fill="black", color="black")) +
+  #theme(plot.background = element_rect(fill="black", color="black")) +
+  #theme(legend.background =element_rect(fill="black", color="black"), legend.text = element_text(color="white"), legend.title = element_text(color="white")) +
+  #theme(axis.text=element_text(color="white", size=12)) +
+  #theme(axis.title=element_text(color="white", face="bold", size=14))  +
+ # theme(legend.position = "none")
+  
+  
+  #color white and black
+n
+ggsave("outputs/106/network-01-max.jpeg", width=10, height=8)
+ggsave("outputs/106/network-01-max.pdf", width=10, height=8)
+
+```
+
+Not complete concordance with things
+Ten_Mile_2_BB_02_2020
+
+
+# Visualize tree
+
+
+```{r}
+tree<-read.tree("outputs/106/phylo/pruned-01-max.min4.phy.varsites.phy.contree")
+ggtree(tree) + geom_nodelab(aes(label=node))
+```
+
+```{r}
+t2<-root.phylo(tree, node=369)
+t2<-midpoint(tree)
+
+t3<-as.polytomy(t2, feature='node.label', fun=function(x) as.numeric(x) < 50)
+
+t<-t3
+t<-drop.tip(t,"WAF011639")
+t<-drop.tip(t,"Broome01")
+t<-ggtree(t)
+
+t$data$Bootstrap<-as.numeric(t$data$label)
+
+d <- t$data
+d <- d[!d$isTip,]
+d$label <- as.numeric(d$label)
+d <- d[d$label >= 90,]
+
+e <- t$data
+e <- e[!e$isTip,]
+e$label <- as.numeric(e$label)
+e <- e[e$label < 90,]
+e <- e[e$label >= 75,]
+
+
+f <- t$data
+f <- f[!f$isTip,]
+f$label <- as.numeric(f$label)
+f <- f[f$label < 75,]
+f <- f[f$label >= 50,]
+```
+
+
+```{r}
+u<-t %<+% relocate(meta, Label) + #bind_rows(m58, rm) +
+  geom_point(data=d,  fill="black", cex=2, alpha=1, pch=22) +
+  geom_point(data=e,  fill="gray50", cex=2, alpha=1, pch=22) +
+#  geom_point(data=f,  fill="grey90", cex=2, alpha=1, pch=22) +
+  geom_tippoint(aes(x=x+0.05,fill=Taxon), pch=21, cex=3) + 
+  geom_tiplab(aes(label=paste0(river, " ",label), x=x+0.1), align = FALSE, size=2) +
+  #geom_text(data=t$data %>% filter(isTip==TRUE) %>% filter(label %in% Run), aes(label=label, x=x+0.01), size=3) +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  xlim(0,1.5) +
+  scale_fill_viridis_d(option="H") +
+  theme(legend.position = "none") +
+  geom_treescale(x = 0)
+
+u
+
+ggsave("outputs/106/nematalosa-phylo.pdf", width=8, height=24)
+```
+eom_facet(panel="Lca03-01", data=df0301, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+```{r}
+df06<-bind_rows(read_csv("meta/erebi-ss-chrom6-genos.csv"), read_csv("meta/noterebi-ss-chrom6-genos.csv"))
+df08<-bind_rows(read_csv("meta/erebi-ss-chrom8-genos.csv"), read_csv("meta/noterebi-ss-chrom8-genos.csv"))
+df09<-bind_rows(read_csv("meta/erebi-ss-chrom9-genos.csv"), read_csv("meta/noterebi-ss-chrom9-genos.csv"))
+df11<-bind_rows(read_csv("meta/erebi-ss-chrom11-genos.csv"), read_csv("meta/noterebi-ss-chrom11-genos.csv"))
+df21<-bind_rows(read_csv("meta/erebi-ss-chrom21-genos.csv"), read_csv("meta/noterebi-ss-chrom21-genos.csv"))
+```
+
+```{r}
+u<-t %<+% relocate(meta, Label) + #bind_rows(m58, rm) +
+    geom_tippoint(aes(x=x+0.01,fill=Taxon), pch=21, cex=3) + 
+    geom_tiplab(aes(label=river, x=x+0.05), size=2) +
+    geom_facet(panel="N-06", data=df06, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+     geom_facet(panel="N-08", data=df08, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+       geom_facet(panel="N-09", data=df09, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+        geom_facet(panel="N-11", data=df11, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+        geom_facet(panel="N-21", data=df21, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+    scale_fill_manual(values=c(viridis(8, option="H"), viridis(3, option="magma"))) 
+ 
+
+
+
+facet_widths(u, c(Tree = 5, `N-06`=0.5, `N-08`=0.5, `N-09`=0.5,`N-11`=0.5,`N-21`=0.5))
+ggsave("outputs/106/nematalosa-phylo-CIs.pdf", width=8, height=24)
+
+```
+
+```{r}
+bind_rows(df06, df08, df09, df11, df21) %>% pivot_wider(names_from = Chromosome, values_from = Genotype) %>% write_csv("meta/erebi-sl-cis.csv")
+```
