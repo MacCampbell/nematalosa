@@ -243,7 +243,7 @@ ggsave("outputs/105/scaffold8-region-pca.jpeg")
 ```
 
 ```{r}
-df2<-df %>% mutate(Chromosome="8") %>% mutate(Genotype=ifelse(Axis1 < -10, "AHom",ifelse(Axis1 > -10 & Axis1 < 2,"Het","RHom"))) %>%
+df2<-df %>% mutate(Chromosome="8") %>% mutate(Genotype=ifelse(Axis1 < -10, "RHom",ifelse(Axis1 > -10 & Axis1 < 2,"Het","AHom"))) %>%
   select(Label,Genotype,Chromosome)
 write_csv(df2,"meta/noterebi-ss-chrom8-genos.csv")
 
@@ -287,7 +287,7 @@ ggsave("outputs/105/scaffold9-region-pca.jpeg")
 
 ```{r}
 
-df2<-df %>% mutate(Chromosome="9") %>% mutate(Genotype=ifelse(Axis1 < -10, "AHom",ifelse(Axis1 > -10 & Axis1 < 2,"Het","RHom"))) %>%
+df2<-df %>% mutate(Chromosome="9") %>% mutate(Genotype=ifelse(Axis1 < -10, "RHom",ifelse(Axis1 > -10 & Axis1 < 2,"Het","AHom"))) %>%
   select(Label,Genotype,Chromosome)
 write_csv(df2,"meta/noterebi-ss-chrom9-genos.csv")
 
@@ -330,7 +330,7 @@ ggsave("outputs/105/scaffold11-region-pca.jpeg")
 ```
 
 ```{r}
-df2<-df %>% mutate(Chromosome="11") %>% mutate(Genotype=ifelse(Axis1 < -7, "AHom",ifelse(Axis1 > -7 & Axis1 < 6,"Het","RHom"))) %>%
+df2<-df %>% mutate(Chromosome="11") %>% mutate(Genotype=ifelse(Axis1 < -7, "RHom",ifelse(Axis1 > -7 & Axis1 < 6,"Het","AHom"))) %>%
   select(Label,Genotype,Chromosome)
 write_csv(df2,"meta/noterebi-ss-chrom11-genos.csv")
 
@@ -372,7 +372,7 @@ ggsave("outputs/105/scaffold21-region-pca.jpeg")
 
 ```{r}
 
-df2<-df %>% mutate(Chromosome="21") %>% mutate(Genotype=ifelse(Axis1 < -5, "AHom",ifelse(Axis1 > -5 & Axis1 < 2,"Het","RHom"))) %>%
+df2<-df %>% mutate(Chromosome="21") %>% mutate(Genotype=ifelse(Axis1 < -5, "RHom",ifelse(Axis1 > -5 & Axis1 < 2,"Het","AHom"))) %>%
   select(Label,Genotype,Chromosome)
 write_csv(df2,"meta/noterebi-ss-chrom21-genos.csv")
 

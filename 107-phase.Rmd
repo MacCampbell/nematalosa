@@ -1,0 +1,267 @@
+---
+title: "107-phase"
+output: html_document
+date: "2025-12-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+```{r}
+library(ape)
+library(vcfR)
+library(viridis)
+library(adegenet)
+library(tanggle)
+library(phangorn)
+library(ggpubr)
+library(ggrepel)
+library(ggplotify)
+library(snpR)
+library(ggtree)
+library(tanggle)
+library(RColorBrewer)
+library(pheatmap)
+library(tidyverse)
+```
+
+Let's pull out an inversion zone for all fish and phase.
+
+```{r}
+meta<-read_csv("meta/meta-filtered-edited.csv")
+meta$Taxon<-factor(meta$Taxon, levels=c("erebi","richardsoni","bulleri","paracome","Pilbara sp. nov.","papuensis","come","vlaminghi"))
+meta<-meta %>% mutate(Label=paste0(pop,"_",id))
+```
+scaffold_6 6291620	22526456
+scaffold_8 5067926	29962161
+scaffold_9 14123901	35865842
+scaffold_11 219668	24099434
+scaffold_21 6558641	24209072
+
+```{sh,eval=FALSE}
+bcftools view -r scaffold_6:6291620-22526456  data/gl_vcf.vcf.gz > outputs/107/inv.vcf
+#1372 variants
+
+bcftools +fill-tags outputs/107/inv.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.10' | bcftools view -i 'INFO/MAF > 0.01'   > outputs/107/filt.vcf
+
+bcftools +fill-tags outputs/107/inv.vcf  -- -t MAF,F_MISSING | bcftools view -i 'F_MISSING < 0.10' | bcftools view -i 'INFO/MAF > 0.01'  |  bcftools +prune -m 0.20 -w 50kb --nsites-per-win 1 --nsites-per-win-mode rand> outputs/107/pruned.vcf
+
+#234 variants radtag has the same coordinates so can't phase
+#92 unlinked variants
+
+# farm:~/temp/
+java -jar ~/bin/beagle.27Jan18.7e1.jar gt=filt.vcf out=beagle-phased ibd=true ibdcm=0.05 > beagle-phase-stdout.txt 
+
+#local
+tabix beagle-phased.vcf.gz
+bcftools convert --hapsample --vcf-ids beagle-phased.vcf.gz  -o phased
+```
+
+```{sh, eval=FALSE}
+paste \
+<(bcftools query -f '[%SAMPLE\t]\n' filt.vcf | head -1 | tr '\t' '\n') \
+<(bcftools query -f '[%GT\t]\n' filt.vcf | awk -v OFS="\t" '{for (i=1;i<=NF;i++) if ($i == "./.") sum[i]+=1 } END {for (i in sum) print i, sum[i] / NR }' | sort -k1,1n | cut -f 2) > missingness.stats
+ cat missingness.stats | sort -k 2 -n | tail
+```
+ 
+```{sh, eval=FALSE}
+conda activate py2;
+~/github/mccloud-rrt/vcf2phylip.py -i filt.vcf;
+~/github/mccloud-rrt/vcf2phylip.py -i pruned.vcf;
+
+conda deactivate;
+
+iqtree2  -nt AUTO -m MFP+ASC -bb 1000 -s filt.min4.phy --seqtype DNA --redo
+iqtree2  -nt AUTO -m MFP+ASC -bb 10000 -s filt.min4.phy.varsites.phy --seqtype DNA --redo
+
+```
+
+```{r}
+dat<-read.dna(file="outputs/107/phylo/filt.min4.phy.varsites.phy")
+write.nexus.data(dat, file="outputs/107/phylo/filt.nex")
+```
+
+```{r}
+net<-read.nexus.networx("outputs/107/phylo/filt-network")
+m<-meta
+```
+
+```{r}
+g<-ggsplitnet(net, color="black")  
+g$data<-left_join(g$data, m, by=c("label"="Label")) 
+
+n<-g + 
+  geom_tippoint(aes(fill=Taxon), cex=5, alpha=1.00, pch=21) +
+  scale_fill_viridis_d(option="H") +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+#  theme(legend.position = "none") +
+  theme(panel.grid=element_blank())
+  #theme(panel.background = element_rect(fill="black", color="black")) +
+  #theme(plot.background = element_rect(fill="black", color="black")) +
+  #theme(legend.background =element_rect(fill="black", color="black"), legend.text = element_text(color="white"), legend.title = element_text(color="white")) +
+  #theme(axis.text=element_text(color="white", size=12)) +
+  #theme(axis.title=element_text(color="white", face="bold", size=14))  +
+ # theme(legend.position = "none")
+  
+  
+  #color white and black
+n
+
+ggsave("outputs/107/inv-network.pdf", width=12, height=8)
+
+```
+
+ML version
+
+
+```{r}
+tree<-read.tree("outputs/107/phylo/filt.min4.phy.varsites.phy.contree")
+ggtree(tree) + geom_nodelab(aes(label=node))
+```
+
+```{r}
+t2<-root.phylo(tree, node=422)
+t2<-midpoint(tree)
+
+t3<-as.polytomy(t2, feature='node.label', fun=function(x) as.numeric(x) < 50)
+
+t<-t3
+t<-drop.tip(t,"WAF011639")
+t<-drop.tip(t,"Broome01")
+t<-ggtree(t)
+
+t$data$Bootstrap<-as.numeric(t$data$label)
+
+d <- t$data
+d <- d[!d$isTip,]
+d$label <- as.numeric(d$label)
+d <- d[d$label >= 90,]
+
+e <- t$data
+e <- e[!e$isTip,]
+e$label <- as.numeric(e$label)
+e <- e[e$label < 90,]
+e <- e[e$label >= 75,]
+
+
+f <- t$data
+f <- f[!f$isTip,]
+f$label <- as.numeric(f$label)
+f <- f[f$label < 75,]
+f <- f[f$label >= 50,]
+```
+```{r}
+df06<-bind_rows(read_csv("meta/erebi-ss-chrom6-genos.csv"), read_csv("meta/noterebi-ss-chrom6-genos.csv"))
+```
+```{r}
+u<-t %<+% relocate(meta, Label) + #bind_rows(m58, rm) +
+#  geom_point(data=d,  fill="black", cex=2, alpha=1, pch=22) +
+ # geom_point(data=e,  fill="gray50", cex=2, alpha=1, pch=22) +
+#  geom_point(data=f,  fill="grey90", cex=2, alpha=1, pch=22) +
+  geom_tippoint(aes(x=x+0.05,fill=Taxon), pch=21, cex=3) + 
+  geom_tiplab(aes(label=paste0(river, " ",label), x=x+0.1), align = FALSE, size=2) +
+      geom_facet(panel="N-06", data=df06, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+
+  #geom_text(data=t$data %>% filter(isTip==TRUE) %>% filter(label %in% Run), aes(label=label, x=x+0.01), size=3) +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  xlim(0,1.5) +
+  #theme(legend.position = "none") +
+  geom_treescale(x = 0) +
+  scale_fill_manual(values=c(viridis(8, option="H"), viridis(3, option="magma"))) 
+
+
+u
+
+ggsave("outputs/107/inv-phylo-6.pdf", width=8, height=24)
+```
+
+
+# Only homs
+
+```{r}
+h<-df06 %>% filter(Genotype == "Het")
+h
+```
+
+```{r}
+t2<-midpoint(tree)
+
+t3<-as.polytomy(t2, feature='node.label', fun=function(x) as.numeric(x) < 50)
+
+t<-t3
+t<-drop.tip(t,h$Label)
+t<-ggtree(t)
+
+t$data$Bootstrap<-as.numeric(t$data$label)
+
+d <- t$data
+d <- d[!d$isTip,]
+d$label <- as.numeric(d$label)
+d <- d[d$label >= 90,]
+
+e <- t$data
+e <- e[!e$isTip,]
+e$label <- as.numeric(e$label)
+e <- e[e$label < 90,]
+e <- e[e$label >= 75,]
+
+
+f <- t$data
+f <- f[!f$isTip,]
+f$label <- as.numeric(f$label)
+f <- f[f$label < 75,]
+f <- f[f$label >= 50,]
+```
+
+```{r}
+u<-t %<+% relocate(meta, Label) + #bind_rows(m58, rm) +
+#  geom_point(data=d,  fill="black", cex=2, alpha=1, pch=22) +
+ # geom_point(data=e,  fill="gray50", cex=2, alpha=1, pch=22) +
+#  geom_point(data=f,  fill="grey90", cex=2, alpha=1, pch=22) +
+  geom_tippoint(aes(x=x+0.05,fill=Taxon), pch=21, cex=3) + 
+  geom_tiplab(aes(label=paste0(river, " ",label), x=x+0.1), align = FALSE, size=2) +
+      geom_facet(panel="N-06", data=df06, geom=geom_tile,
+                  mapping = aes(x=1, fill=Genotype))  +
+
+  #geom_text(data=t$data %>% filter(isTip==TRUE) %>% filter(label %in% Run), aes(label=label, x=x+0.01), size=3) +
+  guides(fill = guide_legend(override.aes = list(pch = 22))) +
+  xlim(0,1.5) +
+  #theme(legend.position = "none") +
+  geom_treescale(x = 0) +
+  scale_fill_manual(values=c(viridis(8, option="H"), viridis(3, option="magma"))) 
+
+
+u
+
+ggsave("outputs/107/inv-phylo-homs-6.pdf", width=8, height=24)
+```
+
+
+## Diversity
+
+```{r}
+h<-read_vcf("outputs/107/filt.vcf")
+
+h2<-calc_hs(h)
+h3<-get.snpR.stats(h2, stats="hs")
+
+dh<-left_join(df06, h3$sample, by=c("Label"="sampID")) %>% left_join(meta) 
+
+samples<-dh %>% group_by(Genotype) %>% summarize(Count=n())
+
+ggplot(dh) +
+  geom_boxplot(aes(x=Genotype, y=hs)) +
+  theme_bw() +
+  ylab("Individual Heterozygosity\n") +
+  xlab("\nGenotype") +
+  theme(panel.grid = element_blank()) +
+  theme(axis.title=element_text(size=14, face="bold")) +
+  theme(axis.text = element_text(size=12)) +
+  ggtitle("Chromosome 6 Inversion Heterozygosities") +
+  theme(plot.title=element_text(hjust=0.5)) #+
+ # facet_wrap(.~Taxon)
+
+ggsave("outputs/107/inv-06-heterozygosity.pdf")
+```
